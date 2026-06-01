@@ -1,16 +1,18 @@
 import json
 import os
 import signal
+import ssl
 import sys
 import time
 
+import certifi
 from kafka import KafkaProducer
 from websocket import WebSocketApp
 
 
 BINANCE_DEPTH_STREAM_URL = os.getenv(
     "BINANCE_DEPTH_STREAM_URL",
-    "wss://stream.binance.com:9443/ws/btcusdt@depth",
+    "wss://stream.binance.us:9443/ws/btcusdt@depth",
 )
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "btcusdt_depth")
@@ -60,7 +62,8 @@ def main() -> int:
             on_error=on_error,
             on_close=on_close,
         )
-        websocket.run_forever(ping_interval=20, ping_timeout=10)
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        websocket.run_forever(ping_interval=20, ping_timeout=10, sslopt={"context": ssl_context})
 
         if running:
             print("reconnecting in 5 seconds")

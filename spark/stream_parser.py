@@ -2,13 +2,15 @@
 spark/stream_parser.py
 
 Extends raw Kafka ingestion (read_kafka.py) by parsing the binary Binance
-depth update payload into typed columns. This is stage two of the Spark layer:
+depth update payload into typed columns and writing to a Delta Lake table.
+This is stage three of the Spark layer:
 
   Kafka binary value
     → UTF-8 string
     → from_json struct (schema-validated)
     → flattened typed columns
-    → console sink
+    ├→ console sink      (visual confirmation, 5-second trigger)
+    └→ Delta Lake sink   (durable storage, 10-second trigger)
 
 The schema declared here is the contract between the Binance stream and
 everything downstream. Delta Lake, aggregations, and the order book
@@ -47,9 +49,9 @@ if "JAVA_HOME" not in os.environ:
         )
 
 # All pyspark imports must come after JAVA_HOME is written to os.environ.
-from pyspark.sql import SparkSession                                    # noqa: E402
-from pyspark.sql.functions import col, from_json, from_unixtime, size  # noqa: E402
-from pyspark.sql.types import (                                         # noqa: E402
+from pyspark.sql import SparkSession                                              # noqa: E402
+from pyspark.sql.functions import col, from_json, from_unixtime, lit, size, to_date  # noqa: E402
+from pyspark.sql.types import (                                                   # noqa: E402
     ArrayType,
     LongType,
     StringType,
@@ -57,21 +59,56 @@ from pyspark.sql.types import (                                         # noqa: 
     StructType,
 )
 
+# DeltaTable is the Python API for Delta Lake DDL (MERGE, OPTIMIZE, VACUUM).
+# We don't use it in this file yet, but importing it here validates that the
+# delta-spark Python package is installed alongside the JAR. If this import
+# fails, run: pip install delta-spark==3.2.0
+from delta.tables import DeltaTable  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-APP_NAME         = "MarketStream-StreamParser"
-KAFKA_BOOTSTRAP  = "localhost:9092"
-KAFKA_TOPIC      = "btcusdt_depth"
-TRIGGER_INTERVAL = "5 seconds"
+APP_NAME        = "MarketStream-StreamParser"
+KAFKA_BOOTSTRAP = "localhost:9092"
+KAFKA_TOPIC     = "btcusdt_depth"
+
+CONSOLE_TRIGGER = "5 seconds"   # fast refresh for visual confirmation
+DELTA_TRIGGER   = "10 seconds"  # slightly slower; Delta commit overhead per batch
 
 # Kafka DataSource V2 connector coordinates.
-# _2.12 is Spark's Scala binary version — must match the Spark build exactly.
-# The trailing 3.5.1 is the connector version — must match the Spark version
-# exactly. Either mismatch produces a ClassNotFoundException at runtime, not
-# a build error, so there is no compile-time safety net.
+# _2.12 is the Scala binary version of the Spark build — must match exactly.
+# 3.5.1 is the connector version — must match the Spark version exactly.
+# A mismatch in either suffix produces ClassNotFoundException at runtime
+# (not at build time), so there is no compile-time safety net.
 KAFKA_PACKAGE = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
+
+# Delta Lake connector coordinates.
+# delta-spark_2.12 must match Spark's Scala binary version (_2.12).
+# 3.2.0 is the Delta Lake version compatible with Spark 3.5.x — the Delta
+# version is NOT the same as the Spark version. Compatibility matrix:
+#   Delta 3.2.x → Spark 3.5.x   (this project)
+#   Delta 3.1.x → Spark 3.5.x
+#   Delta 2.4.x → Spark 3.4.x
+# Using a Delta version built for a different Spark version causes obscure
+# Catalyst plan errors rather than a clean startup failure.
+DELTA_PACKAGE = "io.delta:delta-spark_2.12:3.2.0"
+
+# Both packages passed as a single comma-separated string. Spark's Ivy resolver
+# handles transitive dependencies for each independently; the comma is the
+# only delimiter — no spaces around it.
+ALL_PACKAGES = f"{KAFKA_PACKAGE},{DELTA_PACKAGE}"
+
+# Delta table written here. Spark creates the directory on first write.
+# The path is on the external SSD — fast enough for local development.
+DELTA_PATH = "/Volumes/Tejas SSD/marketstream/delta/order_book"
+
+# Checkpoint location records which Kafka offsets have been committed to Delta
+# so the query can resume exactly where it left off after a restart.
+# MUST be a different path than DELTA_PATH — if they share a directory,
+# Delta's transaction log and Spark's checkpoint files collide and both
+# become unreadable.
+CHECKPOINT_PATH = "/Volumes/Tejas SSD/marketstream/checkpoints/order_book"
 
 # ---------------------------------------------------------------------------
 # Binance depth update schema
@@ -137,11 +174,27 @@ spark = (
     # limits differ. Replace with a cluster URL when deploying.
     .master("local[*]")
 
-    # Triggers Maven/Ivy resolution on first run to download the Kafka connector
-    # JAR and its transitive dependencies (Kafka client, Jackson, Snappy) into
-    # ~/.ivy2/. Subsequent runs use the local cache. Without this config,
-    # .format("kafka") raises AnalysisException: "Failed to find data source: kafka".
-    .config("spark.jars.packages", KAFKA_PACKAGE)
+    # Downloads both the Kafka and Delta Lake JARs (plus their transitive
+    # dependencies) from Maven Central on first run; cached in ~/.ivy2/ after that.
+    # The comma-separated string is the only way to specify multiple packages —
+    # calling .config("spark.jars.packages", ...) twice silently discards the first.
+    .config("spark.jars.packages", ALL_PACKAGES)
+
+    # Registers Delta Lake's SQL parser extension so that Delta-specific SQL
+    # syntax (DESCRIBE HISTORY, RESTORE, GENERATE) works inside spark.sql().
+    # Without this, those statements raise ParseException even though the JARs
+    # are present.
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+
+    # Replaces Spark's default in-memory catalog with Delta's catalog
+    # implementation. This is what makes .format("delta") work as a table
+    # format — the catalog tells Spark how to resolve Delta table paths,
+    # versions, and metadata. Without it, .format("delta") raises
+    # AnalysisException: "delta is not a valid data source".
+    .config(
+        "spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+    )
 
     # Disables schema inference for streaming sources. Has no effect on Kafka
     # (the value column is always BinaryType — nothing to infer), but prevents
@@ -247,7 +300,20 @@ messages = parsed.select(
     # preserves fractional seconds as a TimestampType.
     from_unixtime(col("d.E") / 1000).alias("event_time"),
 
-    col("d.s").alias("symbol"),
+    # Partition key for Delta Lake. to_date() extracts the calendar date from
+    # the epoch-second value, producing a DateType column (e.g. 2026-06-04).
+    # Partitioning by date means Delta writes each day's data into its own
+    # directory (date=2026-06-04/), so a query with a WHERE date = '2026-06-04'
+    # filter skips every other day's files entirely — O(1) file scan instead
+    # of O(n_days). Without this, every query scans all files ever written.
+    to_date(from_unixtime(col("d.E") / 1000)).alias("date"),
+
+    # Hardcoded as a literal rather than read from d.s because this pipeline
+    # processes only BTCUSDT. Using lit() makes the partition column value
+    # constant and visible to the query planner, enabling it to prune the
+    # symbol=BTCUSDT/ partition directory without reading any file metadata.
+    # When we add ETH/SOL streams later, replace lit() with col("d.s").
+    lit("BTCUSDT").alias("symbol"),
 
     # Both update IDs are preserved because the order book reconstructor needs
     # to check: current.U == previous.u + 1. Keeping only one would force a
@@ -284,39 +350,93 @@ messages = parsed.select(
 )
 
 # ---------------------------------------------------------------------------
-# Streaming sink: console
+# Sink 1: Delta Lake (durable storage)
 # ---------------------------------------------------------------------------
 
-query = (
-    messages.writeStream
-    .format("console")
-    .trigger(processingTime=TRIGGER_INTERVAL)
+# Ensure the checkpoint directory exists before starting the query.
+# Spark creates the Delta table directory on first write, but the checkpoint
+# directory must exist (or be creatable) before the StreamingQuery starts.
+os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
-    # append is the only valid outputMode for a query with no aggregation
-    # operators. "complete" requires a groupBy; "update" requires a stateful
-    # operator (window, watermark, or deduplication). Catalyst rejects the
-    # other modes with AnalysisException at query compile time if there is no
-    # aggregation to justify them.
+delta_query = (
+    messages.writeStream
+    .format("delta")
+
+    # append adds new rows; it never modifies or deletes existing rows.
+    # "complete" would require a groupBy and rewrite the entire table each
+    # batch — correct for aggregations, catastrophic for raw tick data.
+    # "update" is for stateful operators (watermarks, deduplication) and
+    # requires a key column to identify which rows changed.
     .outputMode("append")
 
-    # Without truncate=False, Spark clips any string longer than 20 characters
-    # in the console output. The raw_bids and raw_asks arrays printed as strings
-    # can exceed 500 characters on a busy update — the truncation would hide
-    # almost all of the data we are trying to inspect.
-    .option("truncate", "false")
+    # Each micro-batch is one ACID transaction to the Delta table. A 10-second
+    # trigger means: collect all Kafka messages that arrive in a 10-second
+    # window, then commit them atomically. Shorter triggers increase commit
+    # frequency and create more small Parquet files (the "small file problem");
+    # longer triggers reduce commit overhead but increase end-to-end latency.
+    # 10 seconds is a reasonable balance for a dev environment.
+    .trigger(processingTime=DELTA_TRIGGER)
 
+    # The checkpoint records the exact Kafka offsets that have been written to
+    # Delta after each successful commit. On restart, Spark reads this to resume
+    # from the last committed offset rather than re-processing from "latest".
+    # Without a checkpoint, every restart either loses data (latest) or floods
+    # the pipeline with duplicates (earliest).
+    # MUST NOT be inside DELTA_PATH — Delta's _delta_log/ would collide with
+    # Spark's checkpoint files and corrupt both.
+    .option("checkpointLocation", CHECKPOINT_PATH)
+
+    # Partitioning splits the Parquet files into subdirectories by column value:
+    #   delta/order_book/date=2026-06-04/symbol=BTCUSDT/part-00000.parquet
+    # Queries that filter on date or symbol skip entire directory trees without
+    # opening any files — this is Spark's partition pruning optimisation.
+    # "date" is chosen over "event_time" because hourly or per-second
+    # partitions would create thousands of tiny directories; daily is the
+    # standard granularity for market tick data at this volume.
+    .partitionBy("date", "symbol")
+
+    .start(DELTA_PATH)
+)
+
+# ---------------------------------------------------------------------------
+# Sink 2: console (visual confirmation)
+# ---------------------------------------------------------------------------
+
+console_query = (
+    messages.writeStream
+    .format("console")
+    # 5-second trigger gives faster visual feedback than the Delta sink's
+    # 10-second trigger. Both sinks run independently — each has its own
+    # trigger loop and its own Kafka offset tracking.
+    .trigger(processingTime=CONSOLE_TRIGGER)
+    .outputMode("append")
+    # Without truncate=False, Spark clips strings at 20 characters.
+    # raw_bids and raw_asks can exceed 500 characters per row.
+    .option("truncate", "false")
     .start()
 )
 
-print(f"Parsing '{KAFKA_TOPIC}' on {KAFKA_BOOTSTRAP}")
-print(f"Schema: {len(DEPTH_SCHEMA.fields)} top-level fields → {len(messages.columns)} output columns")
-print(f"Trigger: every {TRIGGER_INTERVAL}. Press Ctrl+C to stop.\n")
+# ---------------------------------------------------------------------------
+# Startup banner and shutdown
+# ---------------------------------------------------------------------------
+
+print(f"\nParsing '{KAFKA_TOPIC}' on {KAFKA_BOOTSTRAP}")
+print(f"  Console sink : every {CONSOLE_TRIGGER}")
+print(f"  Delta sink   : every {DELTA_TRIGGER}  →  {DELTA_PATH}")
+print(f"  Checkpoint   : {CHECKPOINT_PATH}")
+print(f"  Partitioned  : date / symbol")
+print(f"  Columns      : {len(messages.columns)}")
+print("Press Ctrl+C to stop.\n")
 
 try:
-    query.awaitTermination()
+    # awaitAnyTermination() blocks until either query fails or is stopped.
+    # Using awaitTermination() on just one query would leave the other running
+    # as an orphan after Ctrl+C; this ensures both are covered.
+    spark.streams.awaitAnyTermination()
 except KeyboardInterrupt:
     print("\nShutting down…")
 finally:
-    query.stop()
+    delta_query.stop()
+    console_query.stop()
     spark.stop()
     print("Done.")

@@ -1,0 +1,91 @@
+version: 2
+
+models:
+  - name: stg_order_book
+    description: >
+      Deduplicated, cast, and filtered Bronze order book events.
+      One row per Binance depth update batch (keyed on last_update_id).
+      Prices are cast from string to DOUBLE; rows with null or zero prices are dropped.
+
+    columns:
+      - name: last_update_id
+        description: >
+          Binance's last update ID for this batch — the sequence cursor used by
+          the order book reconstructor to detect gaps. Unique after deduplication.
+        tests:
+          - unique
+          - not_null
+
+      - name: event_time
+        description: Human-readable timestamp from Binance's event time field (E).
+        tests:
+          - not_null
+
+      - name: symbol
+        description: Trading pair symbol, e.g. BTCUSDT.
+        tests:
+          - not_null
+
+      - name: best_bid_price
+        description: Best bid price cast to DOUBLE. Null rows are filtered in staging.
+        tests:
+          - not_null
+
+      - name: best_ask_price
+        description: Best ask price cast to DOUBLE. Null rows are filtered in staging.
+        tests:
+          - not_null
+
+
+  - name: silver_order_book
+    description: >
+      Silver order book table with derived market microstructure metrics.
+      Builds on stg_order_book and adds mid_price, spread, spread_bps,
+      order_imbalance, bid_depth_total, and ask_depth_total.
+
+    columns:
+      - name: mid_price
+        description: >
+          (best_bid_price + best_ask_price) / 2. The reference price for all
+          percentage-based calculations. Not null because stg already filters
+          rows with null or zero prices.
+        tests:
+          - not_null
+
+      - name: spread
+        description: >
+          best_ask_price - best_bid_price in USD. Always >= 0 in a valid book.
+        tests:
+          - not_null
+          # Custom generic test defined in macros/test_is_non_negative.sql.
+          # Fails (returns rows) if any spread value is strictly negative,
+          # which would indicate a crossed order book — a data corruption signal.
+          - is_non_negative
+
+      - name: spread_bps
+        description: >
+          Spread normalised by mid_price, expressed in basis points (1 bps = 0.01%).
+          Dimensionless and comparable across price levels and time.
+        tests:
+          - not_null
+
+      - name: symbol
+        description: Trading pair symbol, e.g. BTCUSDT.
+        tests:
+          - not_null
+
+      - name: order_imbalance
+        description: >
+          (bid_count - ask_count) / (bid_count + ask_count).
+          Ranges from -1.0 (only asks changed) to +1.0 (only bids changed).
+          NULL when bid_count + ask_count = 0 (no changes in the update).
+
+      - name: bid_depth_total
+        description: >
+          Sum of all non-deletion bid quantities in this update.
+          Excludes entries with qty = 0 (deletion signals).
+
+      - name: ask_depth_total
+        description: >
+          Sum of all non-deletion ask quantities in this update.
+          Excludes entries with qty = 0 (deletion signals).

@@ -1,0 +1,34 @@
+name: 'marketstream_dbt'
+version: '1.0.0'
+config-version: 2
+
+# Must match the top-level key in profiles.yml exactly. dbt uses this to look
+# up the adapter type, database path, and thread count for this project.
+profile: 'marketstream_dbt'
+
+model-paths:    ["models"]
+macro-paths:    ["macros"]
+test-paths:     ["tests"]
+analysis-paths: ["analyses"]
+seed-paths:     ["seeds"]
+snapshot-paths: ["snapshots"]
+
+target-path:  "target"      # compiled SQL and run artifacts written here
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  marketstream_dbt:
+    # Default materialisation for any model not given a more specific config.
+    # Views are cheap (no data is written) but re-run their full query on every
+    # downstream SELECT. For exploratory models that are queried rarely, this is
+    # fine — but the Silver layer must be a table (see below).
+    +materialized: view
+
+    silver:
+      # materialised: table means dbt runs a CREATE TABLE AS SELECT and stores
+      # the result on disk in the DuckDB file. Every subsequent query against
+      # silver_order_book reads the pre-built table instead of re-scanning the
+      # Delta Parquet files. This matters because delta_scan() reads raw Parquet
+      # on every invocation — making the downstream model a view would push that
+      # cost to every analyst query rather than absorbing it once at dbt run time.
+      +materialized: table

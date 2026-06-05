@@ -1,0 +1,23 @@
+marketstream_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+
+      # DuckDB writes a persistent database file here. Using a file (rather than
+      # the default in-memory ":memory:" database) means the materialised Silver
+      # tables survive across dbt runs. The duckdb/ directory sits alongside
+      # delta/ so all derived data lives in one place.
+      path: /Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb
+
+      # On first run, dbt-duckdb runs INSTALL delta; LOAD delta; before any model
+      # SQL executes. The delta extension is what provides delta_scan() — without
+      # it, that function does not exist and every model fails immediately.
+      # Subsequent runs load from the local extension cache (no internet needed).
+      extensions:
+        - delta
+
+      # 4 threads means dbt can materialise up to 4 models in parallel when the
+      # DAG allows it. With only 2 models in a linear chain (stg → silver) only
+      # one runs at a time, but the setting matters once we add more models.
+      threads: 4

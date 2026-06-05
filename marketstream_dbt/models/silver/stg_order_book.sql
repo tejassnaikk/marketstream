@@ -101,6 +101,20 @@ filtered AS (
       AND best_bid_price > 0
       AND best_ask_price > 0
 
+      -- Binance depth diff messages report the most recently *changed* price
+      -- level on each side — not the current best bid/ask from the fully
+      -- reconstructed book. During fast markets, the changed bid level in one
+      -- message can be numerically higher than the changed ask level in the same
+      -- message without representing a real crossed book: each side simply
+      -- reflects a different level that happened to be touched in that update.
+      -- These rows are pipeline artifacts of the diff-stream format, not genuine
+      -- crossed-book conditions. Filtering them here keeps Silver free of
+      -- meaningless negative spreads that would fail the is_non_negative test
+      -- and pollute spread_bps and mid_price with nonsense values.
+      -- The true best bid/ask — and therefore the real spread — can only be
+      -- computed from the full reconstructed order book (Phase 2 of MarketStream).
+      AND best_bid_price < best_ask_price
+
 )
 
 SELECT * FROM filtered

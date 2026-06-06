@@ -1,0 +1,105 @@
+version: 2
+
+models:
+  - name: gold_features_1m
+    description: >
+      1-minute tumbling window aggregations of Silver order book updates.
+      One row per (window_start, symbol) pair. Covers price OHLC-style open/close,
+      depth-weighted VWAP, spread metrics, and order flow imbalance — ready for
+      direct use as ML features or BI dashboard inputs.
+
+    tests:
+      # Composite uniqueness: each (window_start, symbol) pair must appear exactly
+      # once. Duplicate pairs would mean two rows cover the same minute for the
+      # same symbol — a bucketing bug in time_bucket() or a GROUP BY omission.
+      # Uses the is_unique_combination generic macro in macros/test_is_unique_combination.sql.
+      - is_unique_combination:
+          arguments:
+            combination_of: ["window_start", "symbol"]
+
+    columns:
+      - name: window_start
+        description: >
+          Start timestamp of the 1-minute bucket, aligned to exact clock minutes
+          (:00, :01, ...). Computed by time_bucket(INTERVAL '1 MINUTE', event_ts).
+        tests:
+          - not_null
+
+      - name: symbol
+        description: Trading pair symbol, e.g. BTCUSDT.
+        tests:
+          - not_null
+
+      - name: mid_price_open
+        description: >
+          Mid-price of the first order book update in the window (arg_min by event_ts).
+          Represents the price at window open.
+        tests:
+          - not_null
+
+      - name: mid_price_close
+        description: >
+          Mid-price of the last order book update in the window (arg_max by event_ts).
+          Represents the price at window close.
+        tests:
+          - not_null
+
+      - name: vwap
+        description: >
+          Depth-weighted average mid-price for the window.
+          Weighted by (bid_depth_total + ask_depth_total) per update.
+          NULL only when all depth values in the window are NULL.
+        tests:
+          - not_null
+
+
+  - name: gold_features_5m
+    description: >
+      5-minute tumbling window aggregations of Silver order book updates.
+      Identical column structure to gold_features_1m but with 5-minute buckets.
+      Built directly from silver_order_book (not from gold_features_1m) to preserve
+      statistical accuracy: each raw Silver row contributes equally to the aggregates
+      rather than being pre-summarised into 1-minute buckets first.
+
+    tests:
+      # Composite uniqueness: each (window_start, symbol) pair must appear exactly
+      # once. For 5-minute buckets, window_start values will be :00, :05, :10, ...
+      - is_unique_combination:
+          arguments:
+            combination_of: ["window_start", "symbol"]
+
+    columns:
+      - name: window_start
+        description: >
+          Start timestamp of the 5-minute bucket, aligned to clock multiples of
+          5 minutes (:00, :05, :10, ...). Computed by
+          time_bucket(INTERVAL '5 MINUTES', event_ts).
+        tests:
+          - not_null
+
+      - name: symbol
+        description: Trading pair symbol, e.g. BTCUSDT.
+        tests:
+          - not_null
+
+      - name: mid_price_open
+        description: >
+          Mid-price of the first order book update in the 5-minute window
+          (arg_min by event_ts). Represents the price at window open.
+        tests:
+          - not_null
+
+      - name: mid_price_close
+        description: >
+          Mid-price of the last order book update in the 5-minute window
+          (arg_max by event_ts). Represents the price at window close.
+        tests:
+          - not_null
+
+      - name: vwap
+        description: >
+          Depth-weighted average mid-price for the 5-minute window.
+          Weighted by (bid_depth_total + ask_depth_total) per update.
+          NULL only when all depth values in the window are NULL.
+        tests:
+          - not_null

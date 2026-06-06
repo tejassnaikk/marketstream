@@ -32,3 +32,10 @@ models:
       # on every invocation — making the downstream model a view would push that
       # cost to every analyst query rather than absorbing it once at dbt run time.
       +materialized: table
+
+    gold:
+      # Gold is also materialized as table. The aggregation queries scan the full
+      # Silver table on every invocation — storing the result avoids re-running
+      # that scan on every downstream read. Gold tables are the layer BI tools
+      # and ML feature pipelines read from directly.
+      +materialized: table

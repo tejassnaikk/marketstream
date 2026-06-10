@@ -1,0 +1,74 @@
+# Dockerfile.dashboard
+#
+# Streamlit live dashboard for MarketStream.
+# Renders BTC/USDT feature charts and the LightGBM prediction card on port 8501.
+#
+# Build:
+#   docker build -f Dockerfile.dashboard -t marketstream-dashboard .
+#
+# Run standalone (charts only — API card will show "API unavailable"):
+#   docker run -p 8501:8501 marketstream-dashboard
+#
+# Run with DuckDB mounted and API reachable:
+#   docker run -p 8501:8501 \
+#     -v /path/to/marketstream.duckdb:/app/data/marketstream.duckdb:ro \
+#     -e API_URL=http://localhost:8000 \
+#     marketstream-dashboard
+#
+# In docker-compose, both services share a user-defined network so the dashboard
+# container reaches the API container by its service name ("api") rather than
+# localhost. The API_URL ENV below reflects that compose topology.
+#
+# NOTE — API_URL environment variable:
+#   dashboard/app.py currently hardcodes the API base URL as a module-level
+#   constant:
+#     API_URL = "http://localhost:8000"
+#   The ENV below sets the intended container default and documents the override
+#   mechanism, but app.py must be updated to read os.environ.get("API_URL")
+#   before this ENV has any effect at runtime. Until then, the dashboard always
+#   calls localhost:8000 regardless of what -e API_URL is passed.
+#
+# NOTE — DUCKDB_PATH environment variable:
+#   Same situation as API_URL: dashboard/app.py hardcodes the DuckDB path.
+#   The ENV is set here for the future refactor.
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+# Service name "api" is the hostname assigned by Docker's user-defined bridge
+# network when both containers are started via docker-compose. On that network,
+# each service is reachable by its compose service name, not by localhost.
+# Using localhost here would work for `docker run` on the host but would fail
+# inside compose because the dashboard container's localhost is itself, not
+# the API container.
+ENV API_URL=http://api:8000
+
+# Default DuckDB path inside the container. Mount the file at this path with:
+#   -v /host/path/marketstream.duckdb:/app/data/marketstream.duckdb:ro
+ENV DUCKDB_PATH=/app/data/marketstream.duckdb
+
+WORKDIR /app
+
+# Install dependencies before copying source for Docker layer cache efficiency.
+# If only dashboard/app.py changes, Docker reuses this pip layer and skips
+# the install. The four packages cover all imports in dashboard/app.py:
+#   streamlit — page framework and all st.* calls
+#   pandas    — DataFrame used by load_gold_data() and render_charts()
+#   duckdb    — direct connection to gold_features_1m (no Spark session needed)
+#   requests  — fetch_prediction() calls the FastAPI /predict endpoint
+RUN pip install --no-cache-dir \
+    streamlit \
+    pandas \
+    duckdb \
+    requests
+
+COPY dashboard/ /app/dashboard/
+
+EXPOSE 8501
+
+# --server.address=0.0.0.0 binds to all interfaces inside the container so
+# Docker can forward the port to the host. The default (localhost) would make
+# the server unreachable from outside the container even with -p 8501:8501.
+# --server.port=8501 matches the EXPOSE above and the compose port mapping.
+CMD ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]

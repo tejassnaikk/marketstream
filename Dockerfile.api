@@ -1,0 +1,78 @@
+# Dockerfile.api
+#
+# FastAPI prediction service for MarketStream.
+# Serves the LightGBM direction classifier via REST on port 8000.
+#
+# Build:
+#   docker build -f Dockerfile.api -t marketstream-api .
+#
+# Run (local, no DuckDB needed for /health and /metrics):
+#   docker run -p 8000:8000 marketstream-api
+#
+# Run (with DuckDB mounted for /predict):
+#   docker run -p 8000:8000 \
+#     -v /path/to/marketstream.duckdb:/app/data/marketstream.duckdb:ro \
+#     -e DUCKDB_PATH=/app/data/marketstream.duckdb \
+#     marketstream-api
+#
+# NOTE — DUCKDB_PATH environment variable:
+#   ml/features.py currently hardcodes the DuckDB path to the Mac SSD:
+#     DUCKDB_PATH = Path("/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb")
+#   The ENV below sets a container-appropriate default and documents the
+#   intended override mechanism, but features.py must be updated to read
+#   os.environ.get("DUCKDB_PATH") before this ENV has any effect at runtime.
+#   Until then, mount the DuckDB file at the hardcoded path or update features.py
+#   to honour the environment variable.
+
+FROM python:3.11-slim
+
+# PYTHONUNBUFFERED=1 sends stdout/stderr directly to the container log stream
+# without buffering. Without this, print() output from FastAPI startup
+# ("Model loaded", "Metadata loaded") and uvicorn access logs may not appear
+# in `docker logs` until the buffer fills or the process exits — making
+# debugging startup failures much harder.
+ENV PYTHONUNBUFFERED=1
+
+# Default DuckDB path inside the container. Override at runtime with:
+#   docker run -e DUCKDB_PATH=/your/path ...
+# See the note above about features.py needing to read this variable.
+ENV DUCKDB_PATH=/app/data/marketstream.duckdb
+
+WORKDIR /app
+
+# Install Python dependencies before copying application code.
+# Ordering pip install before COPY takes advantage of Docker's layer cache:
+# if only source files change (not the dependency list), Docker reuses the
+# cached pip layer and skips the install on rebuild. Reversing the order
+# would bust the pip cache on every source change.
+#
+# No requirements.txt is used here — the dependency list is short, pinning
+# to exact versions is a separate concern (handled by a lockfile if needed),
+# and keeping installs in the Dockerfile avoids a second file to keep in sync.
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    lightgbm \
+    scikit-learn \
+    pandas \
+    numpy \
+    joblib \
+    duckdb
+
+# Copy only the packages the API needs at runtime.
+# ml/ is copied because api/main.py imports from ml.features (FEATURE_COLS,
+# get_training_data). The container's WORKDIR is /app, which Python adds to
+# sys.path automatically, so `from ml.features import ...` resolves correctly
+# without any extra PYTHONPATH configuration.
+# models/ contains lgbm_direction.pkl and model_metadata.json loaded at startup.
+COPY ml/      /app/ml/
+COPY api/     /app/api/
+COPY models/  /app/models/
+
+EXPOSE 8000
+
+# Run uvicorn as a module so Python resolves api.main relative to /app
+# (the working directory on sys.path). Using `python -m uvicorn` is
+# equivalent to `uvicorn api.main:app` from the shell but is more portable
+# across base images where the uvicorn binary may not be on PATH.
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

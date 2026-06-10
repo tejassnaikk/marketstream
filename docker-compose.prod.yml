@@ -1,0 +1,166 @@
+# docker-compose.prod.yml
+#
+# Production stack for MarketStream on AWS EC2.
+# Runs five services: zookeeper, kafka, producer, api, dashboard.
+#
+# Spark is intentionally excluded — it runs as a separate process outside
+# Docker because it requires hadoop-aws JARs and IAM credential access that
+# are simpler to manage in a bare Python process than inside a container:
+#   nohup /home/ec2-user/miniconda/bin/python spark/stream_parser_s3.py \
+#     > /tmp/spark.log 2>&1 &
+#
+# Prerequisites before starting api and dashboard:
+#   - ./models/          must contain lgbm_direction.pkl and model_metadata.json
+#                        (produced by: python -m ml.train && python -m ml.evaluate)
+#   - ./duckdb_ec2/      must contain marketstream.duckdb with gold_features_1m
+#                        populated (produced by: dbt run after Spark has written
+#                        Bronze data to S3 and Delta has been scanned by DuckDB)
+#
+# Start:
+#   docker-compose -f docker-compose.prod.yml up -d --build
+#
+# Stop:
+#   docker-compose -f docker-compose.prod.yml down
+#
+# View logs:
+#   docker-compose -f docker-compose.prod.yml logs -f
+#   docker-compose -f docker-compose.prod.yml logs -f api
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # zookeeper
+  # Kafka's distributed coordination service. Required by cp-kafka 7.4.0.
+  # Not exposed outside the compose network — only kafka needs to reach it.
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # kafka
+  # Single-broker Kafka cluster. Replication factor 1 is appropriate for a
+  # single-node EC2 deployment — there are no additional brokers to replicate to.
+  #
+  # Two listeners:
+  #   PLAINTEXT://kafka:9092      — used by producer and stream_parser_s3.py
+  #                                 (container-to-container via service name)
+  #   PLAINTEXT_HOST://localhost:9092 — used for direct host access
+  #                                 (e.g. running stream_parser_s3.py outside Docker)
+  #
+  # Port 9092 is published to the host so Spark (running outside Docker) can
+  # connect to Kafka at localhost:9092.
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Auto-create allows stream_parser_s3.py and the producer to create
+      # btcusdt_depth without a manual kafka-topics.sh step on first deploy.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # producer
+  # Binance WebSocket → Kafka. Connects to wss://stream.binance.us:9443 and
+  # publishes each btcusdt@depth update to the btcusdt_depth topic.
+  #
+  # KAFKA_BOOTSTRAP overrides the hardcoded localhost:9092 in
+  # binance_producer.py once that file is updated to read os.environ.get().
+  # Until then it connects to localhost:9092 — see Dockerfile.producer note.
+  # ---------------------------------------------------------------------------
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile.producer
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # api
+  # FastAPI prediction service. Loads lgbm_direction.pkl and model_metadata.json
+  # from the ./models bind mount at startup, then serves /health /metrics /predict.
+  #
+  # Two bind mounts:
+  #   ./models     → /app/models    model artifact + metadata JSON
+  #   ./duckdb_ec2 → /app/data      DuckDB file for /predict (get_training_data)
+  #
+  # DUCKDB_PATH overrides the hardcoded Mac SSD path in ml/features.py once
+  # that file is updated to read os.environ.get(). See Dockerfile.api note.
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      - kafka
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./duckdb_ec2:/app/data
+    environment:
+      DUCKDB_PATH: /app/data/marketstream.duckdb
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # dashboard
+  # Streamlit live dashboard. Reads Gold features directly from DuckDB and
+  # calls the api service for the prediction card.
+  #
+  # API_URL uses the "api" service name — valid because both containers share
+  # the "marketstream" bridge network. Requests to http://api:8000 are routed
+  # by Docker's embedded DNS without leaving the host.
+  #
+  # The same ./duckdb_ec2 volume is mounted here and in the api service so
+  # both containers read the same DuckDB file without a copy.
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./duckdb_ec2:/app/data
+    environment:
+      API_URL: http://api:8000
+      DUCKDB_PATH: /app/data/marketstream.duckdb
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+# ---------------------------------------------------------------------------
+# Networks
+# A user-defined bridge network gives every service a stable DNS name
+# (the service name) for inter-container communication. Without this,
+# containers would need to use IP addresses or the default bridge network,
+# which does not support DNS-based service discovery.
+# ---------------------------------------------------------------------------
+networks:
+  marketstream:
+    driver: bridge

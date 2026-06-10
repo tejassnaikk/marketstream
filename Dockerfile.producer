@@ -1,0 +1,60 @@
+# Dockerfile.producer
+#
+# Binance WebSocket → Kafka producer for MarketStream.
+# Consumes the btcusdt@depth stream from Binance US and publishes
+# each depth update as a raw JSON message to the btcusdt_depth Kafka topic.
+#
+# Build:
+#   docker build -f Dockerfile.producer -t marketstream-producer .
+#
+# Run (requires a reachable Kafka broker):
+#   docker run --network <compose-network> marketstream-producer
+#
+# In docker-compose, the producer reaches the Kafka broker by its service
+# name ("kafka") over the shared user-defined bridge network. There is no
+# port to expose — this container only produces outbound connections
+# (WebSocket to Binance, TCP to Kafka); it accepts no inbound connections.
+#
+# NOTE — KAFKA_BOOTSTRAP environment variable:
+#   producer/binance_producer.py currently hardcodes the broker address:
+#     KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+#   The ENV below sets the intended container default and documents the
+#   override mechanism, but binance_producer.py must be updated to read
+#   os.environ.get("KAFKA_BOOTSTRAP") before this ENV has any effect.
+#   Until then, the producer always connects to localhost:9092, which is
+#   unreachable inside the container (Kafka runs in a separate container).
+#   The fix is a one-liner in binance_producer.py:
+#     KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+# "kafka" is the service name assigned by Docker's user-defined bridge network
+# in docker-compose. Containers on the same compose network reach each other
+# by service name, not by localhost. Port 9092 is the internal listener
+# configured in docker-compose (PLAINTEXT://kafka:9092), distinct from the
+# host-facing listener on localhost:9092 used for local development.
+ENV KAFKA_BOOTSTRAP=kafka:9092
+
+WORKDIR /app
+
+# Install dependencies before copying source for Docker layer cache efficiency.
+#   kafka-python-ng  — KafkaProducer used to publish depth updates
+#   websocket-client — WebSocketApp used to connect to Binance US stream
+#   certifi          — CA bundle for SSL context (fixes CERTIFICATE_VERIFY_FAILED
+#                      on Python 3.11-slim, which ships without system CA certs
+#                      pre-loaded into the ssl module's default context)
+RUN pip install --no-cache-dir \
+    kafka-python-ng \
+    websocket-client \
+    certifi
+
+COPY producer/ /app/producer/
+
+# No EXPOSE — the producer has no HTTP interface and accepts no inbound
+# connections. It only initiates outbound connections:
+#   wss://stream.binance.us:9443  → Binance WebSocket (TLS, egress only)
+#   kafka:9092                    → Kafka broker (TCP, egress only)
+
+CMD ["python", "producer/binance_producer.py"]

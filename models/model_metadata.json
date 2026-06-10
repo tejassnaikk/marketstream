@@ -1,0 +1,26 @@
+{
+  "model_version": "v1",
+  "prediction_target": "price_direction_5min",
+  "label_horizon": 5,
+  "feature_cols": [
+    "vwap",
+    "spread_bps_avg",
+    "imbalance_avg",
+    "depth_ratio",
+    "mid_price_avg",
+    "spread_change",
+    "imbalance_change",
+    "vwap_vs_mid",
+    "rolling_spread_mean",
+    "rolling_imbalance_std"
+  ],
+  "optimal_threshold": 0.9935712359684308,
+  "test_metrics": {
+    "accuracy": 0.6667,
+    "precision": 0.5,
+    "recall": 1.0,
+    "f1": 0.6667,
+    "roc_auc": 0.76
+  },
+  "trained_on_rows": null
+}

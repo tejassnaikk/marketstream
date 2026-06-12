@@ -71,6 +71,12 @@ services:
       # Auto-create allows stream_parser_s3.py and the producer to create
       # btcusdt_depth without a manual kafka-topics.sh step on first deploy.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       - marketstream
     restart: unless-stopped
@@ -80,16 +86,15 @@ services:
   # Binance WebSocket → Kafka. Connects to wss://stream.binance.us:9443 and
   # publishes each btcusdt@depth update to the btcusdt_depth topic.
   #
-  # KAFKA_BOOTSTRAP overrides the hardcoded localhost:9092 in
-  # binance_producer.py once that file is updated to read os.environ.get().
-  # Until then it connects to localhost:9092 — see Dockerfile.producer note.
+  # KAFKA_BOOTSTRAP overrides the localhost:9092 default in binance_producer.py.
   # ---------------------------------------------------------------------------
   producer:
     build:
       context: .
       dockerfile: Dockerfile.producer
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
     networks:
@@ -105,8 +110,6 @@ services:
   #   ./models     → /app/models    model artifact + metadata JSON
   #   ./duckdb_ec2 → /app/data      DuckDB file for /predict (get_training_data)
   #
-  # DUCKDB_PATH overrides the hardcoded Mac SSD path in ml/features.py once
-  # that file is updated to read os.environ.get(). See Dockerfile.api note.
   # ---------------------------------------------------------------------------
   api:
     build:
@@ -121,6 +124,8 @@ services:
       - ./duckdb_ec2:/app/data
     environment:
       DUCKDB_PATH: /app/data/marketstream.duckdb
+      MODEL_PATH: /app/models/lgbm_direction.pkl
+      METADATA_PATH: /app/models/model_metadata.json
     networks:
       - marketstream
     restart: unless-stopped

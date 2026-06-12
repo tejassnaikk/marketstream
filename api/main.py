@@ -16,6 +16,7 @@ Or directly:
 """
 
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,8 +33,8 @@ from ml.features import FEATURE_COLS, get_training_data
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL_PATH    = Path("/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl")
-METADATA_PATH = Path("/Volumes/Tejas SSD/marketstream/models/model_metadata.json")
+MODEL_PATH    = Path(os.environ.get("MODEL_PATH",    "/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl"))
+METADATA_PATH = Path(os.environ.get("METADATA_PATH", "/Volumes/Tejas SSD/marketstream/models/model_metadata.json"))
 
 # ---------------------------------------------------------------------------
 # Module-level state

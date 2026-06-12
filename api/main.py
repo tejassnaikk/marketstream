@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import duckdb
 import joblib
 import numpy as np
 import pandas as pd
@@ -37,6 +38,7 @@ from ml.features import FEATURE_COLS, get_training_data
 
 MODEL_PATH    = Path(os.environ.get("MODEL_PATH",    "/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl"))
 METADATA_PATH = Path(os.environ.get("METADATA_PATH", "/Volumes/Tejas SSD/marketstream/models/model_metadata.json"))
+DUCKDB_PATH   = Path(os.environ.get("DUCKDB_PATH",   "/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb"))
 
 PREDICTION_COUNTER = Counter(
     "marketstream_predictions_total",
@@ -104,6 +106,18 @@ async def lifespan(app: FastAPI):
     print("Metadata loaded")
 
     MODEL_VERSION_GAUGE.labels(version=_metadata["model_version"]).set(1)
+
+    # Ensure predictions log table exists
+    with duckdb.connect(str(DUCKDB_PATH)) as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS predictions_log (
+                ts TIMESTAMPTZ,
+                prediction VARCHAR,
+                confidence DOUBLE,
+                probability DOUBLE
+            )
+        """)
+    print("Predictions log table ready")
 
     yield
 
@@ -227,6 +241,13 @@ def predict():
         PREDICTION_COUNTER.labels(direction=prediction).inc()
         CONFIDENCE_HISTOGRAM.observe(confidence)
 
+        # Log prediction to DuckDB
+        with duckdb.connect(str(DUCKDB_PATH)) as con:
+            con.execute(
+                "INSERT INTO predictions_log VALUES (?, ?, ?, ?)",
+                [datetime.now(timezone.utc), prediction, round(confidence, 4), round(y_prob, 4)]
+            )
+
         return {
             "symbol":        "BTCUSDT",
             "prediction":    prediction,
@@ -241,6 +262,50 @@ def predict():
             "features_used": {k: round(float(v), 6) for k, v in features.items()},
         }
 
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# GET /drift
+# ---------------------------------------------------------------------------
+
+@app.get("/drift")
+def drift():
+    """
+    Compute up/down ratio over the last 100 predictions.
+    Flags drift if either direction exceeds 80%.
+    """
+    try:
+        with duckdb.connect(str(DUCKDB_PATH), read_only=True) as con:
+            result = con.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN prediction = 'up' THEN 1 ELSE 0 END) AS up_count,
+                    SUM(CASE WHEN prediction = 'down' THEN 1 ELSE 0 END) AS down_count
+                FROM (
+                    SELECT prediction FROM predictions_log
+                    ORDER BY ts DESC
+                    LIMIT 100
+                )
+            """).fetchone()
+
+        total, up_count, down_count = result
+        if total == 0:
+            return {"status": "no_data", "total": 0}
+
+        up_ratio = round(up_count / total, 4)
+        down_ratio = round(down_count / total, 4)
+        drifted = up_ratio > 0.8 or down_ratio > 0.8
+
+        return {
+            "status": "drift_detected" if drifted else "ok",
+            "total_predictions": total,
+            "up_ratio": up_ratio,
+            "down_ratio": down_ratio,
+            "drift_threshold": 0.8,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

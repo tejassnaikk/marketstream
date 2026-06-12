@@ -49,6 +49,9 @@ WORKDIR /app
 # No requirements.txt is used here — the dependency list is short, pinning
 # to exact versions is a separate concern (handled by a lockfile if needed),
 # and keeping installs in the Dockerfile avoids a second file to keep in sync.
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \

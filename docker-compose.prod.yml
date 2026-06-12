@@ -50,7 +50,7 @@ services:
   # Two listeners:
   #   PLAINTEXT://kafka:9092      — used by producer and stream_parser_s3.py
   #                                 (container-to-container via service name)
-  #   PLAINTEXT_HOST://localhost:9092 — used for direct host access
+  #   PLAINTEXT_HOST://localhost:29092 — used for direct host access
   #                                 (e.g. running stream_parser_s3.py outside Docker)
   #
   # Port 9092 is published to the host so Spark (running outside Docker) can
@@ -65,7 +65,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       # Auto-create allows stream_parser_s3.py and the producer to create

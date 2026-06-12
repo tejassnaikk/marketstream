@@ -16,6 +16,8 @@ No ML model code lives here. This module is imported by training scripts and
 real-time inference pipelines alike — both get the same feature set.
 """
 
+import os
+
 import duckdb
 import numpy as np
 import pandas as pd
@@ -25,7 +27,7 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-DUCKDB_PATH   = Path("/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb")
+DUCKDB_PATH   = Path(os.environ.get("DUCKDB_PATH", "/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb"))
 
 # Number of 1-minute rows to look forward when constructing the price-direction
 # label. LABEL_HORIZON = 5 means: "did mid_price rise 5 minutes from now?"

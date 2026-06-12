@@ -14,7 +14,7 @@ BINANCE_DEPTH_STREAM_URL = os.getenv(
     "BINANCE_DEPTH_STREAM_URL",
     "wss://stream.binance.us:9443/ws/btcusdt@depth",
 )
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "btcusdt_depth")
 
 running = True

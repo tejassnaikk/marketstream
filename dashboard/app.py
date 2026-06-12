@@ -16,6 +16,7 @@ The FastAPI service must be running on localhost:8000 for the prediction card
 to populate; the charts load directly from DuckDB and work independently.
 """
 
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,8 +30,8 @@ import streamlit as st
 # Constants
 # ---------------------------------------------------------------------------
 
-DUCKDB_PATH      = Path("/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb")
-API_URL          = "http://localhost:8000"
+DUCKDB_PATH      = Path(os.environ.get("DUCKDB_PATH", "/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb"))
+API_URL          = os.environ.get("API_URL", "http://localhost:8000")
 REFRESH_INTERVAL = 60  # seconds between full page reruns
 
 # ---------------------------------------------------------------------------

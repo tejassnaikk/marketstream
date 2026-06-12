@@ -26,13 +26,14 @@ import requests
 # Constants
 # ---------------------------------------------------------------------------
 
-API_URL       = "http://localhost:8000"
-MODEL_PATH    = Path("/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl")
-METADATA_PATH = Path("/Volumes/Tejas SSD/marketstream/models/model_metadata.json")
-DUCKDB_PATH   = Path("/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb")
+import os
+API_URL       = os.environ.get("API_URL", "http://localhost:8000")
+MODEL_PATH    = Path(os.environ.get("MODEL_PATH", "/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl"))
+METADATA_PATH = Path(os.environ.get("METADATA_PATH", "/Volumes/Tejas SSD/marketstream/models/model_metadata.json"))
+DUCKDB_PATH   = Path(os.environ.get("DUCKDB_PATH", "/Volumes/Tejas SSD/marketstream/duckdb/marketstream.duckdb"))
 S3_BUCKET     = "marketstream-delta-tejas"
 S3_PREFIX     = "delta/order_book/"
-LOCAL_DELTA   = Path("/Volumes/Tejas SSD/marketstream/delta/order_book")
+LOCAL_DELTA   = Path(os.environ.get("LOCAL_DELTA", "/Volumes/Tejas SSD/marketstream/delta/order_book"))
 
 # ---------------------------------------------------------------------------
 # Failure accumulator

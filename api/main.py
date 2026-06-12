@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from prometheus_client import Counter, Histogram, Gauge
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from ml.features import FEATURE_COLS, get_training_data
 
@@ -35,6 +37,24 @@ from ml.features import FEATURE_COLS, get_training_data
 
 MODEL_PATH    = Path(os.environ.get("MODEL_PATH",    "/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl"))
 METADATA_PATH = Path(os.environ.get("METADATA_PATH", "/Volumes/Tejas SSD/marketstream/models/model_metadata.json"))
+
+PREDICTION_COUNTER = Counter(
+    "marketstream_predictions_total",
+    "Total number of predictions served, partitioned by direction",
+    ["direction"],
+)
+
+CONFIDENCE_HISTOGRAM = Histogram(
+    "marketstream_prediction_confidence",
+    "Distribution of prediction confidence scores",
+    buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0],
+)
+
+MODEL_VERSION_GAUGE = Gauge(
+    "marketstream_model_version_info",
+    "Metadata about the currently loaded model",
+    ["version"],
+)
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -83,6 +103,8 @@ async def lifespan(app: FastAPI):
         _metadata = json.load(f)
     print("Metadata loaded")
 
+    MODEL_VERSION_GAUGE.labels(version=_metadata["model_version"]).set(1)
+
     yield
 
     # -- Shutdown ------------------------------------------------------------
@@ -100,6 +122,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +146,11 @@ def health():
 
 
 # ---------------------------------------------------------------------------
-# GET /metrics
+# GET /model-info
 # ---------------------------------------------------------------------------
 
-@app.get("/metrics")
-def metrics():
+@app.get("/model-info")
+def model_info():
     """
     Return the full model metadata written by ml/evaluate.py.
 
@@ -199,6 +223,9 @@ def predict():
         # A model predicting "up" with P(up)=0.9 has confidence 0.9.
         # A model predicting "down" with P(up)=0.1 has confidence 0.9 (= P(down)).
         confidence = y_prob if prediction == "up" else 1.0 - y_prob
+
+        PREDICTION_COUNTER.labels(direction=prediction).inc()
+        CONFIDENCE_HISTOGRAM.observe(confidence)
 
         return {
             "symbol":        "BTCUSDT",

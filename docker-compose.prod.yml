@@ -159,6 +159,40 @@ services:
       - marketstream
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # prometheus
+  # Scrapes /metrics from the api service every 15s.
+  # Config is bind-mounted from ./monitoring/prometheus.yml.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # grafana
+  # Visualization layer. Default login: admin / admin.
+  # Persists dashboards in a named volume so they survive container restarts.
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - marketstream
+    restart: unless-stopped
+
 # ---------------------------------------------------------------------------
 # Networks
 # A user-defined bridge network gives every service a stable DNS name
@@ -169,3 +203,6 @@ services:
 networks:
   marketstream:
     driver: bridge
+
+volumes:
+  grafana_data:

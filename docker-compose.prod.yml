@@ -160,6 +160,31 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # watchdog
+  # Dead man's switch — checks Kafka offset growth and API /health every 60s.
+  # Writes alerts to ./logs/watchdog_alerts.log on the host via bind mount.
+  # ---------------------------------------------------------------------------
+  watchdog:
+    build:
+      context: .
+      dockerfile: Dockerfile.watchdog
+    depends_on:
+      kafka:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      API_URL: http://api:8000
+      CHECK_INTERVAL: "60"
+      FAILURE_THRESHOLD: "3"
+    networks:
+      - marketstream
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # prometheus
   # Scrapes /metrics from the api service every 15s.
   # Config is bind-mounted from ./monitoring/prometheus.yml.

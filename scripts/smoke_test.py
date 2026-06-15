@@ -216,6 +216,19 @@ if __name__ == "__main__":
     check("Local Delta (Bronze Parquet files exist)", check_local_delta)
     check("S3 Delta (Bronze objects in s3 bucket)", check_s3_delta)
 
+    # ── Monitoring
+    print("\n── Monitoring")
+
+    check(
+        "Prometheus (port 9090 responding)",
+        lambda: requests.get("http://localhost:9090/-/healthy", timeout=5).status_code == 200,
+    )
+
+    check(
+        "Grafana (port 3000 responding)",
+        lambda: requests.get("http://localhost:3000/api/health", timeout=5).status_code == 200,
+    )
+
     print("\n── API")
     check("API /health (status 200 + model_version)", check_api_health)
     check("API /predict (valid prediction response)", check_api_predict)

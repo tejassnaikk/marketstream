@@ -8,6 +8,36 @@ Real-time cryptocurrency order book pipeline with ML-powered price direction pre
 Binance WS → Kafka → Spark → Delta Lake (Bronze) → dbt → DuckDB (Gold) → LightGBM → FastAPI → Streamlit
 ```
 
+## Monitoring & Observability
+
+MarketStream includes a full monitoring layer deployed alongside the core pipeline.
+
+### Prometheus + Grafana
+- Prometheus scrapes `/metrics` from the FastAPI service every 15 seconds
+- Grafana dashboard at port 3000 with three panels:
+  - **Predictions Over Time** — cumulative prediction counter by direction
+  - **Prediction Rate (per minute)** — rate of predictions using `rate()[1m]`
+  - **API Latency p95** — 95th percentile request latency via histogram quantile
+
+### Custom Metrics
+| Metric | Type | Description |
+|--------|------|-------------|
+| `marketstream_predictions_total` | Counter | Total predictions, labeled by direction (up/down) |
+| `marketstream_prediction_confidence` | Histogram | Confidence score distribution |
+| `marketstream_model_version_info` | Gauge | Currently loaded model version |
+
+### Drift Detection
+- `GET /drift` computes up/down ratio over the last 100 predictions
+- Flags `drift_detected` if either direction exceeds 80%
+- Useful for catching model degradation or data pipeline issues
+
+### Watchdog (Dead Man's Switch)
+- Runs as a dedicated container, checks every 60 seconds:
+  1. Kafka offset growth — are new messages arriving on `btcusdt_depth`?
+  2. API `/health` — is the prediction service responding?
+- After 3 consecutive failures → writes alert to `logs/watchdog_alerts.log` and publishes to AWS SNS
+- SNS topic: `marketstream-alerts` (email subscription)
+
 ## Stack
 
 | Layer | Technology | Purpose |

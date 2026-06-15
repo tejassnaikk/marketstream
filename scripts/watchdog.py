@@ -23,6 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import boto3
 import requests
 from kafka import KafkaConsumer
 from kafka.structs import TopicPartition
@@ -34,6 +35,8 @@ KAFKA_BOOTSTRAP   = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 API_URL           = os.environ.get("API_URL", "http://api:8000")
 CHECK_INTERVAL    = int(os.environ.get("CHECK_INTERVAL", "60"))
 FAILURE_THRESHOLD = int(os.environ.get("FAILURE_THRESHOLD", "3"))
+SNS_TOPIC_ARN     = os.environ.get("SNS_TOPIC_ARN", "")
+AWS_REGION        = os.environ.get("AWS_REGION", "us-east-1")
 TOPIC             = "btcusdt_depth"
 LOG_PATH          = Path("/app/logs/watchdog_alerts.log")
 
@@ -104,12 +107,31 @@ def check_api() -> bool:
 
 def write_alert(component: str, consecutive: int) -> None:
     alert = {
-        "ts":          datetime.now(timezone.utc).isoformat(),
-        "component":   component,
+        "ts":                   datetime.now(timezone.utc).isoformat(),
+        "component":            component,
         "consecutive_failures": consecutive,
-        "message":     f"ALERT: {component} has failed {consecutive} consecutive checks",
+        "message":              f"ALERT: {component} has failed {consecutive} consecutive checks",
     }
     log.warning(json.dumps(alert))
+
+    if SNS_TOPIC_ARN:
+        try:
+            sns = boto3.client("sns", region_name=AWS_REGION)
+            sns.publish(
+                TopicArn=SNS_TOPIC_ARN,
+                Subject=f"MarketStream Alert: {component} failure",
+                Message=(
+                    f"Component: {component}\n"
+                    f"Consecutive failures: {consecutive}\n"
+                    f"Time: {alert['ts']}\n\n"
+                    f"Check EC2 instance i-09b47be8d76bca124 immediately."
+                ),
+            )
+            log.info(f"SNS alert sent for {component}")
+        except Exception as e:
+            log.error(f"SNS publish failed: {e}")
+    else:
+        log.warning("SNS_TOPIC_ARN not set — skipping SNS alert")
 
 
 def main():

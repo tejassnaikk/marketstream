@@ -180,6 +180,8 @@ services:
       API_URL: http://api:8000
       CHECK_INTERVAL: "60"
       FAILURE_THRESHOLD: "3"
+      SNS_TOPIC_ARN: arn:aws:sns:us-east-1:003314338420:marketstream-alerts
+      AWS_REGION: us-east-1
     networks:
       - marketstream
     restart: unless-stopped

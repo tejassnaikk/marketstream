@@ -11,7 +11,8 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     kafka-python-ng \
-    requests
+    requests \
+    boto3
 
 COPY scripts/watchdog.py /app/scripts/watchdog.py
 

@@ -62,7 +62,8 @@ RUN pip install --no-cache-dir \
     joblib \
     duckdb \
     prometheus-fastapi-instrumentator \
-    prometheus-client
+    prometheus-client \
+    pytz
 
 # Copy only the packages the API needs at runtime.
 # ml/ is copied because api/main.py imports from ml.features (FEATURE_COLS,

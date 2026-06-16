@@ -38,6 +38,52 @@ MarketStream includes a full monitoring layer deployed alongside the core pipeli
 - After 3 consecutive failures → writes alert to `logs/watchdog_alerts.log` and publishes to AWS SNS
 - SNS topic: `marketstream-alerts` (email subscription)
 
+## Stream Processing Pipeline
+
+Phase 5 replaced the batch Spark pipeline with a lightweight DuckDB-native streaming architecture optimized for the t3.small EC2 instance.
+
+### Architecture
+Binance WebSocket
+
+→ Kafka (Docker, topic: btcusdt_depth)
+
+→ kafka_to_duckdb.py (background process, batch_size=10)
+
+→ stg_order_book (DuckDB Bronze table)
+
+→ refresh_gold.py (cron every 1 minute)
+
+→ gold_features_1m (DuckDB Gold table)
+
+→ FastAPI /predict (reads latest Gold row)
+
+### Scripts
+
+| Script | Role | Run mode |
+|--------|------|----------|
+| `scripts/kafka_to_duckdb.py` | Kafka consumer → DuckDB Bronze | Background process (`nohup`) |
+| `scripts/refresh_gold.py` | Bronze → Silver → Gold transforms | Cron every 1 minute |
+
+### Latency Profile
+
+Measured on t3.small (2GB RAM) with 8 Docker containers running:
+
+| Segment | Latency |
+|---------|---------|
+| Kafka tick → DuckDB write | ~1.7s |
+| Gold table refresh lag | ~68s |
+| **Total end-to-end** | **~70s** |
+
+Live latency available at `GET /latency`.
+
+### Design Decisions
+
+**DuckDB over Spark** — PySpark's JVM requires ~1GB RAM, leaving insufficient headroom alongside 8 Docker containers on t3.small. DuckDB completes the full Bronze → Silver → Gold transform in under 2 seconds with zero JVM overhead.
+
+**Open/close per batch** — DuckDB enforces a single-writer lock. `kafka_to_duckdb.py` opens a connection only during the batch write and closes it immediately, allowing `refresh_gold.py` to acquire the write lock between batches.
+
+**Batch size 10** — reduces tick lag from ~53s (batch=100) to ~1.7s while keeping DuckDB write frequency manageable (~14 writes/minute at ~140 ticks/second).
+
 ## Stack
 
 | Layer | Technology | Purpose |

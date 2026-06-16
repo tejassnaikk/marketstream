@@ -47,7 +47,7 @@ log = logging.getLogger("refresh_gold")
 SILVER_SQL = """
 CREATE OR REPLACE TABLE silver_order_book AS
 SELECT
-    time_bucket(INTERVAL '1 minute', event_time)           AS window_start,
+    time_bucket(INTERVAL '1 minute', CAST(event_time AS TIMESTAMPTZ))           AS window_start,
     symbol,
     AVG((best_bid_price + best_ask_price) / 2.0)           AS mid_price_avg,
     AVG(
@@ -65,8 +65,9 @@ SELECT
     / NULLIF(SUM(best_bid_qty + best_ask_qty), 0)          AS vwap,
     AVG(best_ask_price - best_bid_price)                   AS spread_avg,
     COUNT(*)                                               AS tick_count
-FROM bronze_order_book
-WHERE best_bid_price IS NOT NULL
+FROM stg_order_book
+WHERE CAST(event_time AS TIMESTAMPTZ) IS NOT NULL
+  AND best_bid_price IS NOT NULL
   AND best_ask_price IS NOT NULL
 GROUP BY 1, 2
 ORDER BY 1 ASC

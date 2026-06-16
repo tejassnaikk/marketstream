@@ -14,13 +14,13 @@
     "rolling_spread_mean",
     "rolling_imbalance_std"
   ],
-  "optimal_threshold": 0.9935712359684308,
+  "optimal_threshold": 0.7012675595998116,
   "test_metrics": {
-    "accuracy": 0.6667,
-    "precision": 0.5,
-    "recall": 1.0,
-    "f1": 0.6667,
-    "roc_auc": 0.76
+    "accuracy": 0.75,
+    "precision": 1.0,
+    "recall": 0.6111,
+    "f1": 0.7586,
+    "roc_auc": 0.7847
   },
   "trained_on_rows": null
 }

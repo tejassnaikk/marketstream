@@ -1,3 +1,4 @@
+import os
 """
 ml/evaluate.py
 
@@ -38,9 +39,9 @@ from ml.train import TEST_SIZE, time_split
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL_PATH    = Path("/Volumes/Tejas SSD/marketstream/models/lgbm_direction.pkl")
-METADATA_PATH = Path("/Volumes/Tejas SSD/marketstream/models/model_metadata.json")
-PLOTS_DIR     = Path("/Volumes/Tejas SSD/marketstream/models/plots")
+MODEL_PATH    = Path(os.environ.get("MODEL_DIR", "/Volumes/Tejas SSD/marketstream/models")) / "lgbm_direction.pkl"
+METADATA_PATH = Path(os.environ.get("MODEL_DIR", "/Volumes/Tejas SSD/marketstream/models")) / "model_metadata.json"
+PLOTS_DIR     = Path(os.environ.get("MODEL_DIR", "/Volumes/Tejas SSD/marketstream/models")) / "plots"
 
 
 # ---------------------------------------------------------------------------

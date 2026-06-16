@@ -1,3 +1,4 @@
+import os
 """
 ml/train.py
 
@@ -39,7 +40,7 @@ from ml.features import FEATURE_COLS, get_training_data
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL_DIR  = Path("/Volumes/Tejas SSD/marketstream/models")
+MODEL_DIR  = Path(os.environ.get("MODEL_DIR", "/Volumes/Tejas SSD/marketstream/models"))
 MODEL_PATH = MODEL_DIR / "lgbm_direction.pkl"
 
 # MLflow tracking URI uses a local file-based store so there is no server to

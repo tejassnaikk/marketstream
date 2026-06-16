@@ -311,6 +311,42 @@ def drift():
 
 
 # ---------------------------------------------------------------------------
+# GET /latency
+# ---------------------------------------------------------------------------
+
+@app.get("/latency")
+def latency():
+    """
+    Report end-to-end pipeline latency:
+    - tick_lag_seconds: age of latest raw tick in stg_order_book
+    - gold_lag_seconds: age of latest Gold feature window
+    - prediction_staleness_seconds: how old the feature row used by /predict is
+    """
+    try:
+        from datetime import timezone as tz
+        with duckdb.connect(str(DUCKDB_PATH), read_only=True) as con:
+            latest_tick = con.execute(
+                "SELECT MAX(CAST(event_time AS TIMESTAMPTZ)) FROM stg_order_book"
+            ).fetchone()[0]
+            latest_gold = con.execute(
+                "SELECT MAX(window_start) FROM gold_features_1m"
+            ).fetchone()[0]
+
+        now = datetime.now(timezone.utc)
+        tick_lag  = round((now - latest_tick).total_seconds(), 1)
+        gold_lag  = round((now - latest_gold.replace(tzinfo=timezone.utc)).total_seconds(), 1)
+
+        return {
+            "tick_lag_seconds":  tick_lag,
+            "gold_lag_seconds":  gold_lag,
+            "total_lag_seconds": round(tick_lag + gold_lag, 1),
+            "timestamp":         now.isoformat(),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install duckdb joblib lightgbm scikit-learn pandas numpy requests boto3
+
+      - name: Run model artifact checks
+        env:
+          MODEL_PATH: ${{ github.workspace }}/models/lgbm_direction.pkl
+          METADATA_PATH: ${{ github.workspace }}/models/model_metadata.json
+        run: |
+          python -c "
+          import joblib, json, os
+          model = joblib.load(os.environ['MODEL_PATH'])
+          print('Model loaded:', type(model).__name__)
+          with open(os.environ['METADATA_PATH']) as f:
+              meta = json.load(f)
+          print('Threshold:', meta['optimal_threshold'])
+          print('ROC-AUC:', meta['test_metrics']['roc_auc'])
+          assert meta['test_metrics']['roc_auc'] > 0.70, 'ROC-AUC below 0.70'
+          print('CI checks passed')
+          "
+
+      - name: Validate feature columns
+        run: |
+          python -c "
+          import json
+          with open('models/model_metadata.json') as f:
+              meta = json.load(f)
+          expected = ['vwap','spread_bps_avg','imbalance_avg','depth_ratio',
+                      'mid_price_avg','spread_change','imbalance_change',
+                      'vwap_vs_mid','rolling_spread_mean','rolling_imbalance_std']
+          actual = meta.get('feature_cols', [])
+          assert actual == expected, f'Feature mismatch: {actual}'
+          print('Feature columns validated:', len(actual), 'features')
+          "

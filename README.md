@@ -5,6 +5,14 @@
 
 Real-time cryptocurrency order book pipeline with ML-powered price direction prediction, full observability stack, and automated model retraining.
 
+## Screenshots
+
+![MarketStream Dashboard](screenshots/dashboard_01.png)
+
+![Live Prediction and Drift Monitoring](screenshots/dashboard_02.png)
+
+![Features and Pipeline Summary](screenshots/dashboard_03.png)
+
 ## Live Endpoints (EC2)
 
 | Endpoint | URL |
